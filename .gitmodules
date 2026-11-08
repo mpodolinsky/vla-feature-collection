@@ -1,0 +1,6 @@
+[submodule "submodules/LIBERO-X"]
+	path = submodules/LIBERO-X
+	url = https://github.com/meituan/LIBERO-X.git
+[submodule "submodules/Isaac-GR00T"]
+	path = submodules/Isaac-GR00T
+	url = https://github.com/NVIDIA/Isaac-GR00T.git

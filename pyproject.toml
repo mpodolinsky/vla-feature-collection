@@ -1,0 +1,45 @@
+[project]
+name = "vla-feature-collection"
+version = "0.1.0"
+description = "Roll out GR00T-N1.7 on LIBERO-X and cache the frozen VLM backbone embeddings"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+# Client side only (simulator + websocket client). The GR00T policy runs in its own venv,
+# submodules/Isaac-GR00T/.venv, built by scripts/groot-libero-x/setup.sh.
+dependencies = [
+    "bddl==1.0.1",
+    "cloudpickle>=2.1",
+    "easydict>=1.9",
+    "future>=0.18.2",
+    "gym==0.25.2",
+    "h5py",
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+    "matplotlib",
+    "mujoco==3.2.3",
+    "numpy>=1.22.4,<2",
+    "openpi-client",
+    "opencv-python>=4.6",
+    "pillow>=10",
+    "pyyaml>=6",
+    "robosuite==1.4.1",
+    "termcolor",
+    "torch==2.7.1",  # imported by LIBERO-X's `libero` package; CPU wheel is enough
+    "tqdm",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb>=0.28.1"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# Websocket client + msgpack codec only (the policy server lives in the Isaac-GR00T venv).
+openpi-client = { git = "https://github.com/Physical-Intelligence/openpi.git", subdirectory = "packages/openpi-client", rev = "215abfb217dbac7d5f1273282331b9b1866c0479" }
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
