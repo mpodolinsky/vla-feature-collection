@@ -100,6 +100,13 @@ prefix pass, split by token type like the GR00T features: `base_image`, `wrist_i
 call. There is no `state_features`. `LAYERS` lists 0-based block outputs; the first is the primary
 (unsuffixed keys), the rest are saved as `base_image@L17` etc.
 
+**Action-expert states.** `EXPERT_LAYERS=16` (0-based expert block, 0..17) additionally saves that block's
+output at each denoise step as `expert@L16` `(S, 50, 1024)` fp16 (one row per policy call), with
+`expert_t@L16` `(S,)` giving the flow time of each step. `EXPERT_STEPS` is `all` (10 steps, default) or
+indices (`0` = first, `9` = last). In openpi's convention t=1.0 is pure noise and t=0.1 the last step,
+and the update is `x <- x + dt*v` with `dt = -0.1`. Unlike the backbone, every expert block is read by the
+action head, and the adapter's LoRA sits inside them, so these states depend on the adapter.
+
 ```
 prefix = [ image 256 | wrist 256 | empty camera 256 (dropped) | text 200 ]  ->  Gemma-2B blocks b0 ... b17
                                                                             -> final norm -> prefix_out
@@ -113,8 +120,9 @@ i.e. to the output of backbone block i-1
   (max about 49k, close to fp16's 65k), `final` about 1.
 - The LoRA only touches the action expert, so these backbone features are the same as the base
   model's; the adapter only changes which actions are executed.
-- Size: about 1.9 MB per policy call per layer with 256 tokens/camera (about 120 calls for a
-  1200-step failure episode). `POOL=2` cuts the image part by 4x.
+- Size on disk, per policy call: backbone layer at 256 tokens/camera about 1.85 MB (`POOL=2`: about 0.6 MB);
+  one expert block over all 10 steps about 0.8 MB (2 steps: about 0.16 MB). A 1200-step failure episode
+  makes 120 calls.
 
 `scripts/pi05-hook/` is the older openpi (JAX) version of the same hook, kept for reference.
 

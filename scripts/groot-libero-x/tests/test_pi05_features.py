@@ -65,6 +65,44 @@ class Pi05SchemaTest(unittest.TestCase):
             identify_groot_features(r, r["actions"], PI05_SPEC)
 
 
+class Pi05ExpertFeatureTest(unittest.TestCase):
+    def _reply(self, steps=10):
+        r = reply(layers=("L16",))
+        rng = np.random.default_rng(1)
+        r["expert@L16"] = rng.standard_normal((steps, 50, 1024)).astype(np.float16)
+        r["expert_t@L16"] = np.linspace(1.0, 0.1, steps).astype(np.float32)
+        return r
+
+    def test_expert_maps_are_kept_as_extras(self) -> None:
+        r = self._reply()
+        f = identify_groot_features(r, r["actions"], PI05_SPEC)
+        self.assertEqual(f.extra["expert@L16"].shape, (10, 50, 1024))
+        self.assertEqual(f.extra["expert@L16"].dtype, np.float16)
+        self.assertEqual(f.extra["expert_t@L16"].dtype, np.float32)  # times are not rounded to fp16
+
+    def test_bad_expert_shapes_and_inf_rejected(self) -> None:
+        r = self._reply(); r["expert@L16"] = r["expert@L16"][0]
+        with self.assertRaises(AlignmentError):
+            identify_groot_features(r, r["actions"], PI05_SPEC)
+        r = self._reply(); r["expert@L16"][3, 0, 0] = np.inf
+        with self.assertRaises(AlignmentError):
+            identify_groot_features(r, r["actions"], PI05_SPEC)
+
+    def test_round_trip_through_npz(self) -> None:
+        rec = build_rollout("LEVEL1", 0, 0, with_features=False, n_policy=2, replan=10, horizon=50)
+        for i, pol in enumerate(rec.policies):
+            r = self._reply(steps=4); r["expert@L16"] += i
+            pol.features = identify_groot_features(r, pol.predicted_action_chunk, PI05_SPEC)
+        with tempfile.TemporaryDirectory() as td:
+            save_rollout(Path(td) / "ep", rec)
+            with np.load(Path(td) / "ep" / "rollout.npz") as z:
+                self.assertEqual(z["expert@L16"].shape, (2, 4, 50, 1024))
+                self.assertEqual(z["expert_t@L16"].shape, (2, 4))
+            back = load_rollout(Path(td) / "ep")
+            self.assertTrue(np.array_equal(back.policies[1].features.extra["expert@L16"],
+                                           rec.policies[1].features.extra["expert@L16"]))
+
+
 class Pi05RoundTripTest(unittest.TestCase):
     def test_save_load_validate_with_extras_and_no_state(self) -> None:
         rec = build_rollout("LEVEL1", 0, 0, with_features=False, n_policy=2, replan=10, horizon=50)

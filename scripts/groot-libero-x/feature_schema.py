@@ -12,7 +12,7 @@ import numpy as np
 from constants import GROOT_SPEC, FeatureSpec
 from records import AlignmentError, GrootFeatures
 
-EXTRA_KEY = re.compile(r"^(base_image|wrist_image|language)@(.+)$")
+EXTRA_KEY = re.compile(r"^(base_image|wrist_image|language|expert|expert_t)@(.+)$")
 
 
 def required_keys(spec: FeatureSpec) -> tuple[str, ...]:
@@ -53,10 +53,18 @@ def identify_groot_features(
         if not m:
             continue
         arr = np.asarray(arr)
-        want = lang_shape if m.group(1) == "language" else img_shape
-        if arr.shape != want:
-            raise AlignmentError(f"{key} shape {arr.shape} != {want}")
-        extra[key] = arr.astype(np.float16)
+        kind = m.group(1)
+        if kind == "expert":          # (steps, action tokens, expert width)
+            if arr.ndim != 3 or arr.shape[0] < 1:
+                raise AlignmentError(f"{key} must be (steps, tokens, width), got {arr.shape}")
+        elif kind == "expert_t":      # flow time of each saved denoise step
+            if arr.ndim != 1:
+                raise AlignmentError(f"{key} must be (steps,), got {arr.shape}")
+        else:
+            want = lang_shape if kind == "language" else img_shape
+            if arr.shape != want:
+                raise AlignmentError(f"{key} shape {arr.shape} != {want}")
+        extra[key] = arr.astype(np.float32 if kind == "expert_t" else np.float16)
 
     checked = [("base_image", base), ("wrist_image", wrist), ("language", language)] + list(extra.items())
     if state is not None:

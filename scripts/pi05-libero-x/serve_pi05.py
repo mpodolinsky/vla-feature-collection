@@ -19,6 +19,10 @@ backbone from the prefix pass, split by token type (fp16, padded language rows z
     base_image (T, 2048)   wrist_image (T, 2048)   language (200, 2048)   language_mask (200,)
     language_len ()        T = 256 per camera, or 256 / pool**2 with --pool-image
 
+Action-expert states (``--expert-layers``) come back as ``expert@L<k>`` ``(S, 50, 1024)`` fp16: the output
+of expert block k at each saved denoise step, plus ``expert_t@L<k>`` ``(S,)`` float32 with the flow time t
+of those steps (t=1.0 is pure noise, t=0.1 the last step; ``--expert-steps`` picks which: ``all`` or indices).
+
 ``--layers`` picks the block outputs (0-based; 17 = last block, ``final`` = after the final norm).
 The first entry is the primary (unsuffixed keys); further entries come back as ``base_image@L<k>``.
 Block 17 and ``final`` are computed but never read by the action expert; block 16 is the last
@@ -100,7 +104,8 @@ class FeatureTap:
 
     FP16_MAX = 65504.0
 
-    def __init__(self, policy, layers: list[str], pool: int):
+    def __init__(self, policy, layers: list[str], pool: int,
+                 expert_layers: list[int] | None = None, expert_steps: list[int] | None = None):
         cfg = policy.config
         lm = policy.model.paligemma_with_expert.paligemma.model.language_model
         self.layers, self.pool = layers, pool
@@ -124,6 +129,31 @@ class FeatureTap:
                 mod = lm.layers[k]
             mod.register_forward_hook(self._hook(name))
 
+        # action expert (Gemma-300M): each block runs once per denoise step, on the 50 action tokens
+        self.expert_layers = list(expert_layers or [])
+        self.n_steps = int(cfg.num_inference_steps)
+        self.expert_steps = list(range(self.n_steps)) if expert_steps is None else list(expert_steps)
+        if any(not 0 <= s < self.n_steps for s in self.expert_steps):
+            raise ValueError(f"--expert-steps must be in 0..{self.n_steps - 1}")
+        self.chunk = int(cfg.chunk_size)
+        self.expert_cap: dict[int, list[torch.Tensor]] = {k: [] for k in self.expert_layers}
+        ex_blocks = policy.model.paligemma_with_expert.gemma_expert.model.layers
+        self.expert_width = int(policy.model.action_in_proj.out_features)
+        for k in self.expert_layers:
+            if not 0 <= k < len(ex_blocks):
+                raise ValueError(f"expert layer {k} out of range 0..{len(ex_blocks) - 1}")
+            ex_blocks[k].register_forward_hook(self._expert_hook(k))
+
+    def _expert_hook(self, k: int):
+        def fn(_module, _inputs, out):
+            self.expert_cap[k].append((out[0] if isinstance(out, tuple) else out).detach())
+        return fn
+
+    @property
+    def expert_times(self) -> list[float]:
+        """Flow time t of each saved step (openpi convention: t=1 noise ... t=1/N last step)."""
+        return [round(1.0 - s / self.n_steps, 4) for s in self.expert_steps]
+
     def _hook(self, name: str):
         def fn(_module, _inputs, out):
             self.cap[name] = (out[0] if isinstance(out, tuple) else out).detach()
@@ -131,6 +161,8 @@ class FeatureTap:
 
     def clear(self) -> None:
         self.cap.clear()
+        for v in self.expert_cap.values():
+            v.clear()
 
     def _fp16(self, x: torch.Tensor) -> np.ndarray:
         x = x.float()
@@ -162,6 +194,13 @@ class FeatureTap:
             out["wrist_image" + sfx] = self._fp16(self._pool(h[self.n_img: 2 * self.n_img]))
             text = h[self.n_cams * self.n_img:] * mask[:, None]     # zero the padded slots
             out["language" + sfx] = self._fp16(text)
+        for k in self.expert_layers:
+            steps = self.expert_cap[k]
+            if len(steps) != self.n_steps:
+                raise RuntimeError(f"expert block {k} ran {len(steps)} times, expected {self.n_steps} denoise steps")
+            x = torch.stack([steps[s][0, -self.chunk:] for s in self.expert_steps])   # (S, 50, 1024)
+            out[f"expert@L{k}"] = self._fp16(x)
+            out[f"expert_t@L{k}"] = np.asarray(self.expert_times, dtype=np.float32)
         return out
 
 
@@ -231,6 +270,11 @@ def main() -> None:
     p.add_argument("--layers", default="16",
                    help="comma list of backbone block outputs to return, 0-based (17 = last block, "
                         "16 = last one the action expert reads) or 'final' (after the final norm); first = primary")
+    p.add_argument("--expert-layers", default="",
+                   help="comma list of action-expert blocks (0-based, 0..17) whose output to save at each "
+                        "selected denoise step, e.g. 16")
+    p.add_argument("--expert-steps", default="all",
+                   help="'all' (10 denoise steps) or comma indices, 0 = first (t=1.0, pure noise), 9 = last (t=0.1)")
     p.add_argument("--pool-image", type=int, default=1,
                    help="average-pool each camera's 16x16 token grid by this factor (2 -> 64 tokens)")
     p.add_argument("--device", default="cuda")
@@ -246,9 +290,13 @@ def main() -> None:
     tap, feat_meta = None, {"with_features": False}
     if args.with_features:
         layers = [s.strip() for s in args.layers.split(",") if s.strip()]
-        tap = FeatureTap(policy, layers, args.pool_image)
+        e_layers = [int(s) for s in args.expert_layers.split(",") if s.strip()]
+        e_steps = None if args.expert_steps == "all" else [int(s) for s in args.expert_steps.split(",") if s.strip()]
+        tap = FeatureTap(policy, layers, args.pool_image, e_layers, e_steps)
         feat_meta = {"with_features": True, "layers": layers, "pool_image": args.pool_image,
-                     "img_tokens": tap.tokens_per_cam, "hidden": 2048, "lang_slots": tap.lang}
+                     "img_tokens": tap.tokens_per_cam, "hidden": 2048, "lang_slots": tap.lang,
+                     "expert_layers": e_layers, "expert_steps": tap.expert_steps,
+                     "expert_times": tap.expert_times, "expert_width": tap.expert_width}
         logging.info("feature capture: %s", feat_meta)
     meta = {**feat_meta, "policy": "pi05-lerobot", "base": args.base, "adapter": adapter,
             "chunk_size": int(cfg.chunk_size), "n_action_steps": int(cfg.n_action_steps),
