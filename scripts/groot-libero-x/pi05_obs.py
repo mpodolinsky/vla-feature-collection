@@ -13,6 +13,20 @@ import numpy as np
 from libero_x_env import quat2axisangle
 
 
+def proprio(obs: dict) -> dict[str, np.ndarray]:
+    """Robot state at a policy call, saved as ``robot_<key>``: ``state`` is exactly the 8-d vector the
+    policy is given; ``joint_pos`` (7) and ``eef_quat`` (4, xyzw) are extras that are not model inputs."""
+    out = {"state": np.concatenate([
+        np.asarray(obs["robot0_eef_pos"], dtype=np.float32),
+        quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32),
+        np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32),
+    ])}
+    if "robot0_joint_pos" in obs:
+        out["joint_pos"] = np.asarray(obs["robot0_joint_pos"], dtype=np.float32)
+    out["eef_quat"] = np.asarray(obs["robot0_eef_quat"], dtype=np.float32)
+    return out
+
+
 def make_bridge(native: bool):
     """Returns ``(build_flat_obs, decode_action_step)`` for the given image convention."""
     sl = (slice(None, None, -1),) if native else (slice(None, None, -1), slice(None, None, -1))
@@ -21,11 +35,7 @@ def make_bridge(native: bool):
         return {
             "image": np.ascontiguousarray(obs["agentview_image"][sl]).astype(np.uint8),
             "wrist_image": np.ascontiguousarray(obs["robot0_eye_in_hand_image"][sl]).astype(np.uint8),
-            "state": np.concatenate([
-                np.asarray(obs["robot0_eef_pos"], dtype=np.float32),
-                quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32),
-                np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32),
-            ]),
+            "state": proprio(obs)["state"],
             "prompt": str(prompt),
         }
 

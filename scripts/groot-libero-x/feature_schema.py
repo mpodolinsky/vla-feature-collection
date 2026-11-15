@@ -12,7 +12,7 @@ import numpy as np
 from constants import GROOT_SPEC, FeatureSpec
 from records import AlignmentError, GrootFeatures
 
-EXTRA_KEY = re.compile(r"^(base_image|wrist_image|language|expert|expert_t)@(.+)$")
+EXTRA_KEY = re.compile(r"^(base_image|wrist_image|language|expert|expert_t|pooled)@(.+)$")
 
 
 def required_keys(spec: FeatureSpec) -> tuple[str, ...]:
@@ -57,6 +57,9 @@ def identify_groot_features(
         if kind == "expert":          # (steps, action tokens, expert width)
             if arr.ndim != 3 or arr.shape[0] < 1:
                 raise AlignmentError(f"{key} must be (steps, tokens, width), got {arr.shape}")
+        elif kind == "pooled":        # (layers, 3 * hidden): [agentview mean | wrist mean | language mean]
+            if arr.ndim != 2 or arr.shape[1] != 3 * spec.hidden:
+                raise AlignmentError(f"{key} must be (layers, {3 * spec.hidden}), got {arr.shape}")
         elif kind == "expert_t":      # flow time of each saved denoise step
             if arr.ndim != 1:
                 raise AlignmentError(f"{key} must be (steps,), got {arr.shape}")

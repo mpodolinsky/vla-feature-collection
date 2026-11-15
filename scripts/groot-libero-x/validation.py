@@ -155,6 +155,10 @@ def _assert_alignment(rollout: RolloutRecord, decode_action_step: Callable) -> N
             ):
                 raise AlignmentError(f"base_image == wrist_image at policy_step {i}")
 
+        for key, arr in pol.proprio.items():
+            if not np.isfinite(np.asarray(arr, dtype=np.float32)).all():
+                raise AlignmentError(f"NaN/Inf in robot_{key} at policy_step {i}")
+
         group = by_policy.get(i, [])
         if not group:
             raise AlignmentError(f"policy_step {i} has no ControlRecords")

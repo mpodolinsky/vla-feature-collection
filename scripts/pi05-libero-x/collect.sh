@@ -7,6 +7,7 @@
 #
 # Env: LAYERS  backbone block outputs to save, 0-based (default 16 = last block the action expert
 #              reads; 17 = last block, never read; final = after the final norm); first = primary
+#      POOLED_LAYERS  'all' (blocks 0-17 + final) or a comma list: per-modality mean-pooled 6144-d vectors (default none)
 #      EXPERT_LAYERS  action-expert blocks to save, 0-based 0..17 (default none), e.g. 16
 #      EXPERT_STEPS   'all' (10 denoise steps, default) or indices, 0 = first (t=1.0) ... 9 = last (t=0.1)
 #      POOL    average-pool each camera's 16x16 token grid by this factor (default 1 = 256 tokens)
@@ -23,6 +24,7 @@ SERVER_PY="$REPO_ROOT/scripts/pi05-libero-x/.venv/bin/python"
 [[ -x "$SERVER_PY" ]] || { echo "pi0.5 venv missing: run (cd scripts/pi05-libero-x && uv sync)" >&2; exit 1; }
 
 SERVE_ARGS=(--port "$PORT" --with-features --layers "${LAYERS:-16}" --pool-image "${POOL:-1}")
+[[ -n "${POOLED_LAYERS:-}" ]] && SERVE_ARGS+=(--pooled-layers "$POOLED_LAYERS")
 [[ -n "${EXPERT_LAYERS:-}" ]] && SERVE_ARGS+=(--expert-layers "$EXPERT_LAYERS" --expert-steps "${EXPERT_STEPS:-all}")
 [[ "${NO_ADAPTER:-0}" == "1" ]] && SERVE_ARGS+=(--no-adapter) || SERVE_ARGS+=(--adapter "${ADAPTER:-podolinsky/pi05-libero-x-level123-lora}")
 

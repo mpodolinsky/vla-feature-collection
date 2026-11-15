@@ -98,9 +98,51 @@ class Pi05ExpertFeatureTest(unittest.TestCase):
             with np.load(Path(td) / "ep" / "rollout.npz") as z:
                 self.assertEqual(z["expert@L16"].shape, (2, 4, 50, 1024))
                 self.assertEqual(z["expert_t@L16"].shape, (2, 4))
+                self.assertEqual(z["expert_t@L16"].dtype, np.float32)
+                self.assertEqual(z["expert@L16"].dtype, np.float16)
             back = load_rollout(Path(td) / "ep")
             self.assertTrue(np.array_equal(back.policies[1].features.extra["expert@L16"],
                                            rec.policies[1].features.extra["expert@L16"]))
+
+
+class Pi05PooledAndStateTest(unittest.TestCase):
+    def test_pooled_vectors_validated(self) -> None:
+        r = reply()
+        r["pooled@all"] = np.random.default_rng(0).standard_normal((19, 3 * 2048)).astype(np.float16)
+        f = identify_groot_features(r, r["actions"], PI05_SPEC)
+        self.assertEqual(f.extra["pooled@all"].shape, (19, 6144))
+        r["pooled@all"] = r["pooled@all"][:, :2048]
+        with self.assertRaises(AlignmentError):
+            identify_groot_features(r, r["actions"], PI05_SPEC)
+
+    def test_robot_state_round_trip_and_finite_check(self) -> None:
+        rec = build_rollout("LEVEL1", 0, 0, with_features=False, n_policy=3, replan=10, horizon=50)
+        for i, pol in enumerate(rec.policies):
+            pol.proprio = {"state": np.full(8, i, np.float32), "joint_pos": np.full(7, i, np.float32),
+                           "eef_quat": np.array([0, 0, 0, 1], np.float32)}
+        from groot_obs import decode_action_step as decode
+        with tempfile.TemporaryDirectory() as td:
+            save_rollout(Path(td) / "ep", rec)
+            with np.load(Path(td) / "ep" / "rollout.npz") as z:
+                self.assertEqual(z["robot_state"].shape, (3, 8))
+                self.assertEqual(z["robot_joint_pos"].shape, (3, 7))
+                self.assertEqual(z["robot_eef_quat"].shape, (3, 4))
+                self.assertEqual(z["robot_state"][2, 0], 2.0)
+            back = load_rollout(Path(td) / "ep")
+            self.assertTrue(np.array_equal(back.policies[1].proprio["joint_pos"], np.full(7, 1, np.float32)))
+            self.assertTrue(validate_rollout(back, decode).all_passed)
+            back.policies[0].proprio["state"][0] = np.nan
+            self.assertFalse(validate_rollout(back, decode).all_passed)
+
+    def test_proprio_fn_extracts_policy_state_and_extras(self) -> None:
+        from pi05_obs import make_bridge, proprio
+        obs = {"agentview_image": np.zeros((4, 4, 3), np.uint8), "robot0_eye_in_hand_image": np.zeros((4, 4, 3), np.uint8),
+               "robot0_eef_pos": [0.1, 0.2, 0.3], "robot0_eef_quat": [0, 0, 0, 1], "robot0_gripper_qpos": [0.04, -0.04],
+               "robot0_joint_pos": list(range(7))}
+        pr = proprio(obs)
+        self.assertEqual(pr["state"].shape, (8,)); self.assertEqual(pr["joint_pos"].shape, (7,)); self.assertEqual(pr["eef_quat"].shape, (4,))
+        build, _ = make_bridge(native=True)
+        self.assertTrue(np.array_equal(build(obs, "x")["state"], pr["state"]))  # the saved state IS the model input
 
 
 class Pi05RoundTripTest(unittest.TestCase):

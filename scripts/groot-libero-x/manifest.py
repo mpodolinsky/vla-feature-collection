@@ -41,9 +41,23 @@ def episode_dir(output_dir: Path, level: str, task_index: int, task_stem: str, e
     return output_dir / level / task_dirname(task_index, task_stem) / f"ep{episode:03d}"
 
 
+SHIPPED_MARKER = "shipped.json"   # written by ship_to_hub.py once the heavy files are verified on the Hub
+HEAVY_FILES = ("rollout.npz", "rollout.mp4", "wrist.mp4")
+
+
+def episode_is_shipped(directory: Path) -> bool:
+    return (directory / SHIPPED_MARKER).is_file()
+
+
 def episode_is_complete(directory: Path, *, expect_video: bool = True) -> bool:
     meta = directory / "rollout.json"
     npz = directory / "rollout.npz"
+    if episode_is_shipped(directory):  # heavy files were uploaded and deleted; rollout.json stays
+        try:
+            json.loads(meta.read_text(encoding="utf-8"))
+            return True
+        except (ValueError, OSError):
+            return False
     if not (meta.is_file() and npz.is_file()):
         return False
     if expect_video and not (

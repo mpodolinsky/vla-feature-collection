@@ -76,6 +76,7 @@ def run_episode(
     decode_action_step: Callable,
     native: bool,
     spec: FeatureSpec = GROOT_SPEC,
+    proprio_fn: Callable | None = None,
 ) -> RolloutRecord:
     t0 = time.time()
 
@@ -95,6 +96,7 @@ def run_episode(
 
     while not success and control_step_next < max_steps:
         if not action_plan:
+            proprio = proprio_fn(observation) if proprio_fn is not None else {}
             result = client.infer(build_flat_obs(observation, instruction))
             if "actions" not in result:
                 raise RuntimeError(f"policy response missing 'actions': keys={list(result)}")
@@ -112,6 +114,7 @@ def run_episode(
                     executed_control_step_start=control_step_next,
                     executed_control_step_end=control_step_next + n_take - 1,
                     features=_features_from_result(result, actions, spec),
+                    proprio=proprio,
                 )
             )
             for j in range(n_take):

@@ -140,7 +140,7 @@ def save_rollout(
         if feats[0].state_features is not None:
             feature_payload["state_features"] = np.stack([f.state_features for f in feats]).astype(np.float16)
         for key in feats[0].extra:  # other captured layers, e.g. base_image@L17
-            feature_payload[key] = np.stack([f.extra[key] for f in feats]).astype(np.float16)
+            feature_payload[key] = np.stack([f.extra[key] for f in feats])  # keeps fp16 (maps) / float32 (flow times)
 
     payload = {
         "predicted_action_chunks": chunks,
@@ -164,6 +164,9 @@ def save_rollout(
         "has_features": np.bool_(has_features),
     }
     payload.update(feature_payload)
+    if rollout.policies and rollout.policies[0].proprio:   # robot state at each policy call
+        for key in sorted(rollout.policies[0].proprio):
+            payload[f"robot_{key}"] = np.stack([p.proprio[key] for p in rollout.policies]).astype(np.float32)
     _save_npz_atomic(npz_path, payload)
     return meta_path, npz_path
 
@@ -209,6 +212,7 @@ def load_rollout(
                 executed_control_step_start=int(pmeta["executed_control_step_start"]),
                 executed_control_step_end=int(pmeta["executed_control_step_end"]),
                 features=features,
+                proprio={k.removeprefix("robot_"): np.asarray(v[i]) for k, v in arrays.items() if k.startswith("robot_")},
             )
         )
 

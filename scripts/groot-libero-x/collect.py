@@ -23,6 +23,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -98,6 +99,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "(server must run with --with-features).")
     p.add_argument("--checkpoint-label", default=None,
                    help="Recorded in rollout.json (default: the policy's LIBERO-X checkpoint).")
+    p.add_argument("--task-start", type=int, default=0,
+                   help="first task index to run (indices stay global, so batches/slices never collide)")
+    p.add_argument("--task-stop", type=int, default=None, help="stop before this task index (default: all)")
     p.add_argument("--tasks-file", type=Path, default=None,
                    help="One BDDL filename per line. Default: tasks/<LEVEL>.txt "
                         "if it exists, else a fresh seeded sample.")
@@ -106,6 +110,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--fresh", action="store_true", help="Re-collect episodes even if already complete.")
     p.add_argument("--keep-going", action="store_true", help="Continue past a per-episode error.")
+    p.add_argument("--fail-on-issues", action="store_true",
+                   help="Exit non-zero if any episode errored or failed the alignment gate; gate-failed episodes "
+                        "are moved to <output>/_quarantine/ so they are never shipped.")
     p.add_argument("--allow-wrap", action="store_true",
                    help="Allow episode index >= number of init states (wraps via modulo). "
                         "Default: skip those episodes.")
@@ -146,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     level = args.level
 
     build_flat_obs, decode_action_step = _load_bridge(args.policy, args.convention)
+    proprio_fn = None
+    if args.policy == "pi05":
+        from pi05_obs import proprio as proprio_fn
     native = args.convention == "native"
 
     from openpi_client.websocket_client_policy import WebsocketClientPolicy
@@ -180,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         for task_index, task_file in enumerate(task_files):
+            if task_index < args.task_start or (args.task_stop is not None and task_index >= args.task_stop):
+                continue
             if task_index in broken:
                 continue
             stem = task_stems[(level, task_index)]
@@ -225,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
                         task_index=task_index, max_steps=args.max_steps,
                         server_metadata=server_metadata,
                         build_flat_obs=build_flat_obs, decode_action_step=decode_action_step,
-                        native=native, spec=spec,
+                        native=native, spec=spec, proprio_fn=proprio_fn,
                     )
                     if args.with_features and rollout.policies and rollout.policies[0].features is None:
                         raise RuntimeError(
@@ -239,6 +251,11 @@ def main(argv: list[str] | None = None) -> int:
                     if not report.all_passed:
                         n_gate_failed += 1
                         logging.error("ALIGNMENT GATE FAILED for %s\n%s", directory, report.format())
+                        if args.fail_on_issues:
+                            quarantine = output_dir / "_quarantine" / f"{level}__{directory.parent.name}__{directory.name}"
+                            quarantine.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(directory), str(quarantine))
+                            logging.error("moved to %s", quarantine)
                         if not args.keep_going:
                             logging.error("stopping (pass --keep-going to continue)")
                             return 1
@@ -283,6 +300,9 @@ def main(argv: list[str] | None = None) -> int:
         "collected=%d skipped=%d gate_failed=%d errored=%d  manifest rows=%d  next_incomplete=%s",
         n_done, n_skipped, n_gate_failed, n_errored, len(rows), remaining,
     )
+    if args.fail_on_issues and (n_gate_failed or n_errored):
+        logging.error("issues: %d gate failures, %d errors -> exit 3", n_gate_failed, n_errored)
+        return 3
     return 0
 
 

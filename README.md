@@ -124,6 +124,23 @@ i.e. to the output of backbone block i-1
   one expert block over all 10 steps about 0.8 MB (2 steps: about 0.16 MB). A 1200-step failure episode
   makes 120 calls.
 
+### Collect and ship to a Hugging Face dataset
+
+`scripts/pi05-libero-x/run_and_ship.py` runs the collection task by task and uploads in batches
+(about 50 GB) so the disk never fills up:
+
+```bash
+.venv/bin/python scripts/pi05-libero-x/run_and_ship.py --repo-id <user>/<dataset> --visibility public --n-rollouts 5
+```
+
+Per policy call it saves the robot state, backbone blocks 16 and 8 as full tokens, mean-pooled per-modality
+6144-d vectors of all 19 backbone layers, and all 18 expert blocks at denoise steps 0, 5, 9
+(`DATASET_CARD.md` documents every key; it becomes the dataset's README). One full-length episode is about
+1 GB. `scripts/groot-libero-x/ship_to_hub.py` does the shipping: commit the episode directories, check every
+file on the Hub (size and sha256), and only then delete `rollout.npz` and the videos locally (`rollout.json`,
+`manifest.csv` and a `shipped.json` marker stay, so a resumed run skips them). Any mismatch or error stops with
+nothing deleted; afterwards the Hub holds the only copy.
+
 `scripts/pi05-hook/` is the older openpi (JAX) version of the same hook, kept for reference.
 
 ## Credits and licence

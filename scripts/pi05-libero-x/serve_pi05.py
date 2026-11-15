@@ -19,6 +19,10 @@ backbone from the prefix pass, split by token type (fp16, padded language rows z
     base_image (T, 2048)   wrist_image (T, 2048)   language (200, 2048)   language_mask (200,)
     language_len ()        T = 256 per camera, or 256 / pool**2 with --pool-image
 
+Pooled vectors (``--pooled-layers``, ``all`` = blocks 0-17 + ``final``) come back as ``pooled@all``
+``(n_layers, 6144)`` fp16: per layer the mean over the agentview tokens, the mean over the wrist tokens and
+the mean over the real (non-pad) language tokens, concatenated in that order; layer order is in the metadata.
+
 Action-expert states (``--expert-layers``) come back as ``expert@L<k>`` ``(S, 50, 1024)`` fp16: the output
 of expert block k at each saved denoise step, plus ``expert_t@L<k>`` ``(S,)`` float32 with the flow time t
 of those steps (t=1.0 is pure noise, t=0.1 the last step; ``--expert-steps`` picks which: ``all`` or indices).
@@ -105,7 +109,8 @@ class FeatureTap:
     FP16_MAX = 65504.0
 
     def __init__(self, policy, layers: list[str], pool: int,
-                 expert_layers: list[int] | None = None, expert_steps: list[int] | None = None):
+                 expert_layers: list[int] | None = None, expert_steps: list[int] | None = None,
+                 pooled_layers: list[str] | None = None):
         cfg = policy.config
         lm = policy.model.paligemma_with_expert.paligemma.model.language_model
         self.layers, self.pool = layers, pool
@@ -119,7 +124,8 @@ class FeatureTap:
         self.cap: dict[str, torch.Tensor] = {}
         self.n_clamped = 0
         n_blocks = len(lm.layers)
-        for name in layers:
+        self.pooled_layers = list(pooled_layers or [])
+        for name in dict.fromkeys(list(layers) + self.pooled_layers):   # union, order kept
             if name == "final":
                 mod = lm.norm
             else:
@@ -194,6 +200,14 @@ class FeatureTap:
             out["wrist_image" + sfx] = self._fp16(self._pool(h[self.n_img: 2 * self.n_img]))
             text = h[self.n_cams * self.n_img:] * mask[:, None]     # zero the padded slots
             out["language" + sfx] = self._fp16(text)
+        if self.pooled_layers:
+            rows = []
+            m = mask[:, None].float()
+            for name in self.pooled_layers:
+                h = self.cap[name][0].float()                                         # (prefix, 2048)
+                lang = (h[self.n_cams * self.n_img:] * m).sum(0) / m.sum().clamp(min=1.0)
+                rows.append(torch.cat([h[: self.n_img].mean(0), h[self.n_img: 2 * self.n_img].mean(0), lang]))
+            out["pooled@all"] = self._fp16(torch.stack(rows))
         for k in self.expert_layers:
             steps = self.expert_cap[k]
             if len(steps) != self.n_steps:
@@ -270,6 +284,9 @@ def main() -> None:
     p.add_argument("--layers", default="16",
                    help="comma list of backbone block outputs to return, 0-based (17 = last block, "
                         "16 = last one the action expert reads) or 'final' (after the final norm); first = primary")
+    p.add_argument("--pooled-layers", default="",
+                   help="'all' (blocks 0-17 + final) or a comma list: save the per-modality mean-pooled "
+                        "6144-d vector of each of these layers (one array 'pooled@all')")
     p.add_argument("--expert-layers", default="",
                    help="comma list of action-expert blocks (0-based, 0..17) whose output to save at each "
                         "selected denoise step, e.g. 16")
@@ -292,10 +309,13 @@ def main() -> None:
         layers = [s.strip() for s in args.layers.split(",") if s.strip()]
         e_layers = [int(s) for s in args.expert_layers.split(",") if s.strip()]
         e_steps = None if args.expert_steps == "all" else [int(s) for s in args.expert_steps.split(",") if s.strip()]
-        tap = FeatureTap(policy, layers, args.pool_image, e_layers, e_steps)
+        n_blocks = len(policy.model.paligemma_with_expert.paligemma.model.language_model.layers)
+        pooled = ([str(i) for i in range(n_blocks)] + ["final"] if args.pooled_layers == "all"
+                  else [s.strip() for s in args.pooled_layers.split(",") if s.strip()])
+        tap = FeatureTap(policy, layers, args.pool_image, e_layers, e_steps, pooled)
         feat_meta = {"with_features": True, "layers": layers, "pool_image": args.pool_image,
                      "img_tokens": tap.tokens_per_cam, "hidden": 2048, "lang_slots": tap.lang,
-                     "expert_layers": e_layers, "expert_steps": tap.expert_steps,
+                     "pooled_layers": pooled, "expert_layers": e_layers, "expert_steps": tap.expert_steps,
                      "expert_times": tap.expert_times, "expert_width": tap.expert_width}
         logging.info("feature capture: %s", feat_meta)
     meta = {**feat_meta, "policy": "pi05-lerobot", "base": args.base, "adapter": adapter,
