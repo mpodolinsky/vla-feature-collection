@@ -136,8 +136,11 @@ def save_rollout(
             "language": np.stack([f.language for f in feats]).astype(np.float16),
             "language_mask": np.stack([f.language_mask for f in feats]).astype(np.bool_),
             "language_len": np.asarray([f.language_len for f in feats], dtype=np.int32),
-            "state_features": np.stack([f.state_features for f in feats]).astype(np.float16),
         }
+        if feats[0].state_features is not None:
+            feature_payload["state_features"] = np.stack([f.state_features for f in feats]).astype(np.float16)
+        for key in feats[0].extra:  # other captured layers, e.g. base_image@L17
+            feature_payload[key] = np.stack([f.extra[key] for f in feats]).astype(np.float16)
 
     payload = {
         "predicted_action_chunks": chunks,
@@ -155,8 +158,8 @@ def save_rollout(
         "replan_steps": np.int32(rollout.replan_steps),
         "n_policy": np.int32(n_pol),
         "n_control": np.int32(rollout.n_control),
-        "img_tokens": np.int32(GROOT_IMG_TOKENS),
-        "hidden": np.int32(GROOT_HIDDEN),
+        "img_tokens": np.int32(feature_payload["base_image"].shape[1] if has_features else GROOT_IMG_TOKENS),
+        "hidden": np.int32(feature_payload["base_image"].shape[2] if has_features else GROOT_HIDDEN),
         "control_hz": np.float32(rollout.control_hz or CONTROL_HZ),
         "has_features": np.bool_(has_features),
     }
@@ -193,7 +196,8 @@ def load_rollout(
                 language=np.asarray(arrays["language"][i]),
                 language_mask=np.asarray(arrays["language_mask"][i]),
                 language_len=int(arrays["language_len"][i]),
-                state_features=np.asarray(arrays["state_features"][i]),
+                state_features=np.asarray(arrays["state_features"][i]) if "state_features" in arrays else None,
+                extra={k: np.asarray(v[i]) for k, v in arrays.items() if "@" in k},
                 source=pmeta.get("feature_source") or FEATURE_SOURCE,
                 module=pmeta.get("feature_module") or FEATURE_MODULE,
                 shapes={k: tuple(v) for k, v in (pmeta.get("feature_shapes") or {}).items()},

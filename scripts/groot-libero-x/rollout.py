@@ -18,17 +18,16 @@ from typing import Any, Callable
 
 import numpy as np
 
-from constants import CONTROL_HZ, FEATURE_SERVER_SCRIPT, FEATURE_SOURCE, MODEL_ID, EvalConfig
-from feature_schema import identify_groot_features
+from constants import CONTROL_HZ, GROOT_SPEC, EvalConfig, FeatureSpec
+from feature_schema import identify_groot_features, required_keys
 from records import ControlRecord, GrootFeatures, PolicyRecord, RolloutRecord
 
-_FEATURE_KEYS = ("base_image", "wrist_image", "language", "language_mask", "state_features")
-
-
-def _features_from_result(result: dict, raw_actions: np.ndarray) -> GrootFeatures | None:
-    if not all(k in result for k in _FEATURE_KEYS):
+def _features_from_result(
+    result: dict, raw_actions: np.ndarray, spec: FeatureSpec = GROOT_SPEC
+) -> GrootFeatures | None:
+    if not all(k in result for k in required_keys(spec)):
         return None
-    return identify_groot_features(result, raw_actions)
+    return identify_groot_features(result, raw_actions, spec)
 
 
 def _rollout_id(level: str, task_index: int, episode_index: int, bddl_stem: str) -> str:
@@ -76,6 +75,7 @@ def run_episode(
     build_flat_obs: Callable,
     decode_action_step: Callable,
     native: bool,
+    spec: FeatureSpec = GROOT_SPEC,
 ) -> RolloutRecord:
     t0 = time.time()
 
@@ -111,7 +111,7 @@ def run_episode(
                     predicted_action_chunk=actions,
                     executed_control_step_start=control_step_next,
                     executed_control_step_end=control_step_next + n_take - 1,
-                    features=_features_from_result(result, actions),
+                    features=_features_from_result(result, actions, spec),
                 )
             )
             for j in range(n_take):
@@ -160,10 +160,10 @@ def run_episode(
         success=success,
         max_steps=max_steps,
         seed=cfg.seed,
-        model_id=MODEL_ID,
+        model_id=spec.model_id,
         checkpoint=cfg.checkpoint_label or cfg.checkpoint,
-        feature_source=FEATURE_SOURCE,
-        feature_server=FEATURE_SERVER_SCRIPT,
+        feature_source=spec.source,
+        feature_server=spec.server_script,
         feature_server_version=server_metadata,
         control_hz=CONTROL_HZ,
         num_steps_wait=cfg.num_steps_wait,

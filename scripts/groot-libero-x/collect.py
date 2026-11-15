@@ -20,17 +20,21 @@ runs in ``submodules/Isaac-GR00T/.venv`` behind ``scripts/groot-libero-x/serve.s
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import sys
 from pathlib import Path
 
+PI05_CHECKPOINT_LABEL = "podolinsky/pi05-libero-x-level123-lora"
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from constants import (  # noqa: E402
     CUSTOM_CHECKPOINT_LABEL,
     DEFAULT_COLLECT_DIR,
+    GROOT_SPEC,
+    PI05_SPEC,
     TASKS_DIR,
     LEVELS,
     EvalConfig,
@@ -59,17 +63,29 @@ def _load_groot_obs(convention: str):
     return groot_obs.build_flat_obs, groot_obs.decode_action_step
 
 
+def _load_bridge(policy: str, convention: str):
+    """(build_flat_obs, decode_action_step) for the chosen policy."""
+    if policy == "pi05":
+        from pi05_obs import make_bridge
+
+        return make_bridge(native=convention == "native")
+    return _load_groot_obs(convention)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--policy", choices=("groot", "pi05"), default="groot",
+                   help="which policy server is on --port (pi05: scripts/pi05-libero-x/serve_pi05.py)")
     p.add_argument("--level", choices=LEVELS, default="LEVEL1", help="One level per invocation.")
     p.add_argument("--n-rollouts", type=int, default=10, help="Episodes per task.")
     p.add_argument("--seed", type=int, default=7, help="Only used when sampling tasks (no finetune list).")
     p.add_argument("--n-tasks", type=int, default=5, help="Sample size when there's no finetune list.")
-    p.add_argument("--replan-steps", type=int, default=EvalConfig.replan_steps)
+    p.add_argument("--replan-steps", type=int, default=None,
+                   help="actions executed per chunk (default: groot 25, pi05 10 = the adapter's n_action_steps)")
     p.add_argument("--max-steps", type=int, default=EvalConfig.max_steps)
     p.add_argument("--num-steps-wait", type=int, default=EvalConfig.num_steps_wait,
                    help="Horizon budget only -- no dummy settle steps are executed.")
@@ -80,12 +96,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--with-features", action="store_true",
                    help="Require + save the layer-16 backbone hidden states "
                         "(server must run with --with-features).")
-    p.add_argument("--checkpoint-label", default=CUSTOM_CHECKPOINT_LABEL,
-                   help="Recorded in rollout.json (the client can't query the server for it).")
+    p.add_argument("--checkpoint-label", default=None,
+                   help="Recorded in rollout.json (default: the policy's LIBERO-X checkpoint).")
     p.add_argument("--tasks-file", type=Path, default=None,
                    help="One BDDL filename per line. Default: tasks/<LEVEL>.txt "
                         "if it exists, else a fresh seeded sample.")
-    p.add_argument("--output-dir", type=Path, default=DEFAULT_COLLECT_DIR)
+    p.add_argument("--output-dir", type=Path, default=None,
+                   help="default: outputs/groot-libero-x/collect or outputs/pi05-libero-x/collect")
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--fresh", action="store_true", help="Re-collect episodes even if already complete.")
     p.add_argument("--keep-going", action="store_true", help="Continue past a per-episode error.")
@@ -117,11 +134,18 @@ def _resolve_task_list(args: argparse.Namespace) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args(argv)
+    if args.replan_steps is None:
+        args.replan_steps = 10 if args.policy == "pi05" else EvalConfig.replan_steps
+    if args.output_dir is None:
+        args.output_dir = (DEFAULT_COLLECT_DIR.parent.parent / "pi05-libero-x" / "collect"
+                           if args.policy == "pi05" else DEFAULT_COLLECT_DIR)
+    if args.checkpoint_label is None:
+        args.checkpoint_label = (PI05_CHECKPOINT_LABEL if args.policy == "pi05" else CUSTOM_CHECKPOINT_LABEL)
     output_dir = args.output_dir.resolve()
     expect_video = not args.no_video
     level = args.level
 
-    build_flat_obs, decode_action_step = _load_groot_obs(args.convention)
+    build_flat_obs, decode_action_step = _load_bridge(args.policy, args.convention)
     native = args.convention == "native"
 
     from openpi_client.websocket_client_policy import WebsocketClientPolicy
@@ -133,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.with_features and not meta.get("with_features"):
         logging.error("--with-features requested but the server was not started with --with-features")
         return 2
+
+    spec = GROOT_SPEC
+    if args.policy == "pi05":  # token count depends on the server's --pool-image
+        spec = dataclasses.replace(PI05_SPEC, img_tokens=int(meta.get("img_tokens", PI05_SPEC.img_tokens)),
+                                   module=f"{PI05_SPEC.module}; layers={meta.get('layers')}")
+        logging.info("pi0.5 features: layers=%s img_tokens=%d", meta.get("layers"), spec.img_tokens)
 
     task_files = _resolve_task_list(args)
     task_stems = {(level, i): Path(name).stem for i, name in enumerate(task_files)}
@@ -195,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                         task_index=task_index, max_steps=args.max_steps,
                         server_metadata=server_metadata,
                         build_flat_obs=build_flat_obs, decode_action_step=decode_action_step,
-                        native=native,
+                        native=native, spec=spec,
                     )
                     if args.with_features and rollout.policies and rollout.policies[0].features is None:
                         raise RuntimeError(
