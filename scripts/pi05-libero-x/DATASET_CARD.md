@@ -27,8 +27,26 @@ policy call. Collected with [`vla-feature-collection`](https://github.com/mpodol
 - **Episodes:** 5 per task (initial states 0-4), 1200 control steps at most, native LIBERO-X image convention.
 - **Execution:** the policy predicts a 50-step chunk and 10 actions are executed before the next call, so there are
   at most 120 policy calls per episode.
-- **The adapter is a one-epoch checkpoint with a low success rate**, so most episodes are failures.
-  Success per episode is in `manifest.csv` (`success`).
+- **Outcome labels:** success per episode is in `manifest.csv` (`success`); the failed episodes are what makes
+  the features useful for failure detection. Summary below.
+
+## Success rate
+
+Policy: one-epoch LoRA adapter, 5 rollouts per task, 360 episodes.
+
+| | Episodes | Successes | SR |
+|---|---|---|---|
+| All LEVEL1 | 360 | 47 | 13.1% |
+
+Per-task success out of 5 rollouts:
+
+| Successes | 0/5 | 1/5 | 2/5 | 3/5 | 4/5 | 5/5 |
+|---|---|---|---|---|---|---|
+| Tasks | 49 | 10 | 8 | 2 | 0 | 3 |
+
+23 of the 72 tasks have at least one successful rollout. Fully solved (5/5): `00` turn on the flat stove,
+`57` place the yellow bowl to the right of the bowl drainer, `60` pick up the bowl on the table and place it to the
+right of the bowl drainer. Per-task counts: group `manifest.csv` by `task_index` and sum `success`.
 
 ## Layout
 
