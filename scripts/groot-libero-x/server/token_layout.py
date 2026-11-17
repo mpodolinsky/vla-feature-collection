@@ -17,7 +17,7 @@ IM_END_ID = 151645
 
 HIDDEN = 2048
 IMG_TOKENS = 64          # 256px / patch 16 -> 16x16 -> 2x2 merge -> 8x8 per camera
-LANG_MAX = 200           # instruction tokens zero-padded to this (matches pi0.5 SAVE-A)
+LANG_MAX = 200           # instruction tokens zero-padded to this (same length as the pi0.5 features)
 STATE_FEATURE_DIM = 1536
 
 

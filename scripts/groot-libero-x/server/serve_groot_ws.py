@@ -129,7 +129,7 @@ def main() -> None:
     logging.info("policy loaded.")
 
     meta = {
-        "policy": "gr00t-n1.7-libero_10",
+        "policy": "gr00t-n1.7",
         "action_order": list(ACTION_ORDER),
         "with_features": bool(args.with_features),
     }

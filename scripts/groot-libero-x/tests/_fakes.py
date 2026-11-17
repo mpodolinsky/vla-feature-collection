@@ -76,7 +76,7 @@ def build_rollout(
         replan_steps=replan, success=success, max_steps=1200,
         seed=7, model_id="gr00t-n1.7-libero-x", checkpoint="rohansiva/gr00t-libero-x-level123",
         feature_source="backbone", feature_server="scripts/groot-libero-x/server/serve_groot_ws.py",
-        feature_server_version="{'policy': 'gr00t-n1.7-libero_10'}",
+        feature_server_version="{'policy': 'gr00t-n1.7'}",
         control_hz=20.0, num_steps_wait=num_steps_wait,
         sim_failure_category="success" if success else "unsatisfied_goal",
         failing_predicate="" if success else "(on obj table)",

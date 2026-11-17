@@ -151,13 +151,12 @@ file on the Hub (size and sha256), and only then delete `rollout.npz` and the vi
 `manifest.csv` and a `shipped.json` marker stay, so a resumed run skips them). Any mismatch or error stops with
 nothing deleted; afterwards the Hub holds the only copy.
 
-`scripts/pi05-hook/` is the older openpi (JAX) version of the same hook, kept for reference.
-
 ## Credits and licence
 
-Built on NVIDIA [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T), Meituan
-[LIBERO-X](https://github.com/meituan/LIBERO-X) and Physical Intelligence
-[openpi](https://github.com/Physical-Intelligence/openpi) (Apache-2.0; `server/msgpack_numpy.py` and
-`pi05-hook/` derive from it) and Hugging Face [LeRobot](https://github.com/huggingface/lerobot)
-(Apache-2.0). The π0.5 base and adapter weights fall under the Gemma terms of use. This repo has no
-licence file yet; check the upstream licences before redistributing.
+Code: [MIT](LICENSE). Built on NVIDIA [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T) (Apache-2.0),
+Meituan [LIBERO-X](https://github.com/meituan/LIBERO-X) (MIT code; CC BY 4.0 dataset),
+Physical Intelligence [openpi](https://github.com/Physical-Intelligence/openpi) (Apache-2.0;
+`server/msgpack_numpy.py` is vendored from `openpi-client`) and Hugging Face
+[LeRobot](https://github.com/huggingface/lerobot) (Apache-2.0). Third-party notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Model weights keep their own terms: the π0.5 base and
+adapter fall under the Gemma terms of use, and the GR00T backbone (Cosmos-Reason2-2B) under NVIDIA's licence.

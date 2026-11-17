@@ -11,7 +11,8 @@ msgpack is good for (de)serializing data over a network for multiple reasons:
 The code below is adapted from https://github.com/lebedov/msgpack-numpy. The reason not to use that library directly is
 that it falls back to pickle for object arrays.
 
-Vendored (verbatim) from openpi-client (``openpi_client/msgpack_numpy.py``).
+Vendored (verbatim) from openpi-client (``openpi_client/msgpack_numpy.py``, Apache-2.0, Physical Intelligence),
+which adapts msgpack-numpy (BSD-3-Clause, Copyright (c) 2013-2022 Lev E. Givon). See THIRD_PARTY_NOTICES.md.
 """
 
 import functools

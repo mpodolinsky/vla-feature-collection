@@ -2,8 +2,8 @@
 
 `Gr00tPolicy._get_action` runs the backbone + action head but keeps only
 `action_pred`. This subclass re-implements the same pipeline, splits the
-layer-`select_layer` backbone hidden states (`backbone_features`, the pi0.5
-SAVE-A analog) by token type, and hands them back in the `info` dict:
+layer-`select_layer` backbone hidden states (`backbone_features`) by token
+type, and hands them back in the `info` dict:
 
     base_image      (64, 2048)   float16   first camera's merged patches
     wrist_image     (64, 2048)   float16   second camera's merged patches
