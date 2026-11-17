@@ -1,10 +1,20 @@
 # vla-feature-collection
 
-Roll out **GR00T-N1.7** on **[LIBERO-X](https://github.com/meituan/LIBERO-X)** and cache the
-frozen VLM backbone's per-token hidden states ("embeddings") for every policy call, together
-with actions, clocks, success and videos.
+Roll out a VLA policy on **[LIBERO-X](https://github.com/meituan/LIBERO-X)** and cache its internal
+hidden states ("embeddings") for every policy call, together with the robot state, actions, clocks,
+success and videos. Two policies are wired up: **GR00T-N1.7** (frozen VLM backbone, layer 16) and
+**pi0.5** through LeRobot with a LoRA adapter (backbone and action-expert blocks, full or pooled tokens).
+Finished episodes can be shipped to a Hugging Face dataset and deleted locally.
 
-Policy and simulator run in separate venvs and talk over an openpi-style msgpack websocket:
+<p align="center"><img src="docs/pipeline.gif" alt="Pipeline: simulate, policy with hooks, record, ship to the Hugging Face Hub" width="860"></p>
+
+*The pipeline is policy-agnostic: the simulator sends observations to any VLA over a websocket, hooks inside the
+policy capture hidden states, the recorder writes them with actions, robot state, clocks and videos, and finished
+batches are uploaded, verified and deleted locally. The outputs panel shows what the pi0.5 policy produces
+(`scripts/pi05-libero-x/DATASET_CARD.md`); the animation is rendered by `docs/make_pipeline_gif.py`.*
+
+Policy and simulator run in separate venvs and talk over an openpi-style msgpack websocket (GR00T shown;
+the pi0.5 section below uses the same split):
 
 ```
 top-level .venv (py3.11)                     submodules/Isaac-GR00T/.venv (py3.10)
