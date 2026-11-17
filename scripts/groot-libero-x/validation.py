@@ -73,8 +73,10 @@ def validate_rollout(rollout: RolloutRecord, decode_action_step: Callable) -> Va
             "wrist_image": tuple(f0.wrist_image.shape),
             "language": tuple(f0.language.shape),
             "language_mask": tuple(f0.language_mask.shape),
-            "state_features": tuple(f0.state_features.shape),
         }
+        if f0.state_features is not None:
+            shapes["state_features"] = tuple(f0.state_features.shape)
+        shapes.update({k: tuple(v.shape) for k, v in f0.extra.items()})
     report.header = {
         "rollout_id": rollout.rollout_id,
         "level": rollout.level,
@@ -136,12 +138,14 @@ def _assert_alignment(rollout: RolloutRecord, decode_action_step: Callable) -> N
         if pol.policy_step != i:
             raise AlignmentError(f"policy_step ids not sequential: {pol.policy_step} != {i}")
         if pol.features is not None:
-            for name, arr in (
+            checked = [
                 ("base_image", pol.features.base_image),
                 ("wrist_image", pol.features.wrist_image),
                 ("language", pol.features.language),
-                ("state_features", pol.features.state_features),
-            ):
+            ] + list(pol.features.extra.items())
+            if pol.features.state_features is not None:
+                checked.append(("state_features", pol.features.state_features))
+            for name, arr in checked:
                 if not np.isfinite(np.asarray(arr, dtype=np.float32)).all():
                     raise AlignmentError(f"NaN/Inf in {name} at policy_step {i}")
             if np.allclose(
@@ -150,6 +154,10 @@ def _assert_alignment(rollout: RolloutRecord, decode_action_step: Callable) -> N
                 atol=1e-4,
             ):
                 raise AlignmentError(f"base_image == wrist_image at policy_step {i}")
+
+        for key, arr in pol.proprio.items():
+            if not np.isfinite(np.asarray(arr, dtype=np.float32)).all():
+                raise AlignmentError(f"NaN/Inf in robot_{key} at policy_step {i}")
 
         group = by_policy.get(i, [])
         if not group:

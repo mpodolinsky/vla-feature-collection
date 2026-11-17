@@ -1,0 +1,15 @@
+[project]
+name = "pi05-libero-x-policy"
+version = "0.1.0"
+description = "pi0.5 (LeRobot) + LoRA policy server for LIBERO-X; runs in its own venv, talks to the client over websocket"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "lerobot[pi]==0.7.0",
+    "peft",
+    "websockets>=13",
+    "msgpack>=1.0",
+    "numpy",
+]
+
+[tool.uv]
+package = false

@@ -56,6 +56,38 @@ NUM_IMAGE_TOKENS = GROOT_IMG_TOKENS
 HIDDEN_DIM = GROOT_HIDDEN
 
 
+@dataclass(frozen=True)
+class FeatureSpec:
+    """What a policy's feature server returns, so the collection pipeline can check/save it."""
+
+    name: str
+    model_id: str
+    img_tokens: int          # tokens per camera
+    hidden: int              # feature width
+    lang_max: int            # language slots (zero-padded)
+    state_dim: int | None    # None: the policy has no separate state feature
+    source: str
+    module: str
+    server_script: str
+
+
+GROOT_SPEC = FeatureSpec(
+    name="groot", model_id=MODEL_ID, img_tokens=GROOT_IMG_TOKENS, hidden=GROOT_HIDDEN,
+    lang_max=LANG_MAX_TOKENS, state_dim=STATE_FEATURE_DIM, source=FEATURE_SOURCE,
+    module=FEATURE_MODULE, server_script=SERVER_SCRIPT,
+)
+
+# pi0.5 (LeRobot): block outputs of the PaliGemma Gemma-2B backbone over the prefix
+# [image 256 | wrist 256 | empty-camera 256 | text 200]. img_tokens is 256 unless the server
+# pools (--pool-image); collect.py rebuilds the spec from the server metadata.
+PI05_SPEC = FeatureSpec(
+    name="pi05", model_id="pi05-lerobot", img_tokens=256, hidden=2048, lang_max=200,
+    state_dim=None, source="backbone",
+    module="lerobot PI05 paligemma Gemma-2B block output on the prefix pass (layers: see server metadata)",
+    server_script="scripts/pi05-libero-x/serve_pi05.py",
+)
+
+
 @dataclass
 class EvalConfig:
     libero_x_root: Path = LIBERO_X_ROOT

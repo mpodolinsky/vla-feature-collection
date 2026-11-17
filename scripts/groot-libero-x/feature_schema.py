@@ -1,55 +1,78 @@
-"""Backbone-feature identity checks. Fail if this is not the split layer-16
-hidden state block from ``serve_groot_ws.py --with-features``.
-
-Benchmark-agnostic (LIBERO_PANDA + Qwen3-VL token layout, unchanged by the
-LIBERO-X fine-tune).
-"""
+"""Backbone-feature identity checks, driven by a ``FeatureSpec`` (GR00T layer-16 blocks from
+``serve_groot_ws.py --with-features``, or pi0.5 prefix block outputs from ``serve_pi05.py``).
+Fails loudly on any shape / finiteness / token-split problem."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
 
-from constants import (
-    FEATURE_MODULE,
-    FEATURE_SOURCE,
-    HIDDEN_DIM,
-    LANG_MAX_TOKENS,
-    NUM_IMAGE_TOKENS,
-    STATE_FEATURE_DIM,
-)
+from constants import GROOT_SPEC, FeatureSpec
 from records import AlignmentError, GrootFeatures
 
-REQUIRED_KEYS = ("base_image", "wrist_image", "language", "language_mask", "state_features")
+EXTRA_KEY = re.compile(r"^(base_image|wrist_image|language|expert|expert_t|pooled)@(.+)$")
 
 
-def identify_groot_features(features: dict[str, Any], actions: np.ndarray) -> GrootFeatures:
-    missing = [k for k in REQUIRED_KEYS if k not in features]
+def required_keys(spec: FeatureSpec) -> tuple[str, ...]:
+    keys = ("base_image", "wrist_image", "language", "language_mask")
+    return keys + (("state_features",) if spec.state_dim is not None else ())
+
+
+def identify_groot_features(
+    features: dict[str, Any], actions: np.ndarray, spec: FeatureSpec = GROOT_SPEC
+) -> GrootFeatures:
+    """Check one policy reply's features against ``spec`` and return them as fp16 arrays.
+
+    Besides the primary ``base_image`` / ``wrist_image`` / ``language`` keys, any
+    ``<name>@<tag>`` keys (extra captured layers) are validated and kept in ``extra``.
+    """
+    missing = [k for k in required_keys(spec) if k not in features]
     if missing:
         raise AlignmentError(
-            f"backbone features missing {missing}. "
-            "Start the server with --with-features (GROOT_WITH_FEATURES=1)."
+            f"backbone features missing {missing}. Start the server with --with-features."
         )
     base = np.asarray(features["base_image"])
     wrist = np.asarray(features["wrist_image"])
     language = np.asarray(features["language"])
     mask = np.asarray(features["language_mask"])
-    state = np.asarray(features["state_features"])
+    state = np.asarray(features["state_features"]) if spec.state_dim is not None else None
 
-    if base.shape != (NUM_IMAGE_TOKENS, HIDDEN_DIM):
-        raise AlignmentError(f"base_image shape {base.shape} != ({NUM_IMAGE_TOKENS}, {HIDDEN_DIM})")
-    if wrist.shape != (NUM_IMAGE_TOKENS, HIDDEN_DIM):
-        raise AlignmentError(f"wrist_image shape {wrist.shape} != ({NUM_IMAGE_TOKENS}, {HIDDEN_DIM})")
-    if language.shape != (LANG_MAX_TOKENS, HIDDEN_DIM):
-        raise AlignmentError(f"language shape {language.shape} != ({LANG_MAX_TOKENS}, {HIDDEN_DIM})")
-    if mask.shape != (LANG_MAX_TOKENS,):
-        raise AlignmentError(f"language_mask {mask.shape} != ({LANG_MAX_TOKENS},)")
-    if state.shape != (STATE_FEATURE_DIM,):
-        raise AlignmentError(f"state_features {state.shape} != ({STATE_FEATURE_DIM},)")
+    img_shape, lang_shape = (spec.img_tokens, spec.hidden), (spec.lang_max, spec.hidden)
+    for name, arr, want in (("base_image", base, img_shape), ("wrist_image", wrist, img_shape),
+                            ("language", language, lang_shape), ("language_mask", mask, (spec.lang_max,))):
+        if arr.shape != want:
+            raise AlignmentError(f"{name} shape {arr.shape} != {want}")
+    if state is not None and state.shape != (spec.state_dim,):
+        raise AlignmentError(f"state_features {state.shape} != ({spec.state_dim},)")
 
-    for name, arr in (("base_image", base), ("wrist_image", wrist), ("language", language),
-                      ("state_features", state)):
+    extra: dict[str, np.ndarray] = {}
+    for key, arr in features.items():
+        m = EXTRA_KEY.match(key)
+        if not m:
+            continue
+        arr = np.asarray(arr)
+        kind = m.group(1)
+        if kind == "expert":          # (steps, action tokens, expert width)
+            if arr.ndim != 3 or arr.shape[0] < 1:
+                raise AlignmentError(f"{key} must be (steps, tokens, width), got {arr.shape}")
+        elif kind == "pooled":        # (layers, 3 * hidden): [agentview mean | wrist mean | language mean]
+            if arr.ndim != 2 or arr.shape[1] != 3 * spec.hidden:
+                raise AlignmentError(f"{key} must be (layers, {3 * spec.hidden}), got {arr.shape}")
+        elif kind == "expert_t":      # flow time of each saved denoise step
+            if arr.ndim != 1:
+                raise AlignmentError(f"{key} must be (steps,), got {arr.shape}")
+        else:
+            want = lang_shape if kind == "language" else img_shape
+            if arr.shape != want:
+                raise AlignmentError(f"{key} shape {arr.shape} != {want}")
+        extra[key] = arr.astype(np.float32 if kind == "expert_t" else np.float16)
+
+    checked = [("base_image", base), ("wrist_image", wrist), ("language", language)] + list(extra.items())
+    if state is not None:
+        checked.append(("state_features", state))
+    for name, arr in checked:
         if not np.isfinite(arr.astype(np.float32)).all():
             raise AlignmentError(f"{name} has NaN/Inf")
     if not bool(mask.any()):
@@ -69,21 +92,24 @@ def identify_groot_features(features: dict[str, Any], actions: np.ndarray) -> Gr
     lang_len = features.get("language_len")
     lang_len = int(mask.sum()) if lang_len is None else int(lang_len)
 
+    shapes = {
+        "base_image": tuple(base.shape), "wrist_image": tuple(wrist.shape),
+        "language": tuple(language.shape), "language_mask": tuple(mask.shape),
+        "actions": tuple(actions.shape),
+    }
+    if state is not None:
+        shapes["state_features"] = tuple(state.shape)
+    shapes.update({k: tuple(v.shape) for k, v in extra.items()})
+
     return GrootFeatures(
         base_image=base.astype(np.float16),
         wrist_image=wrist.astype(np.float16),
         language=language.astype(np.float16),
         language_mask=mask.astype(bool),
         language_len=lang_len,
-        state_features=state.astype(np.float16),
-        source=FEATURE_SOURCE,
-        module=FEATURE_MODULE,
-        shapes={
-            "base_image": tuple(base.shape),
-            "wrist_image": tuple(wrist.shape),
-            "language": tuple(language.shape),
-            "language_mask": tuple(mask.shape),
-            "state_features": tuple(state.shape),
-            "actions": tuple(actions.shape),
-        },
+        state_features=None if state is None else state.astype(np.float16),
+        extra=extra,
+        source=spec.source,
+        module=spec.module,
+        shapes=shapes,
     )

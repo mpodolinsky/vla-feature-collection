@@ -73,19 +73,81 @@ Pure unit tests (no simulator, GPU or network):
 cd scripts/groot-libero-x && python -m unittest discover -s tests
 ```
 
-## pi0.5 hook (reference)
+## pi0.5 (LeRobot) with the LoRA adapter
 
-`scripts/pi05-hook/` holds the π0.5 counterpart of the feature server so the same capture can be
-added for π0.5 on LIBERO-X later: `pi0_features.py` (a fork of openpi's `Pi0.sample_actions` that
-also returns the prefix hidden states it already computes), `serve_pi05_with_features.py`
-(feature-serving websocket server) and `verify_features.py` (numeric check against upstream).
-They need an [openpi](https://github.com/Physical-Intelligence/openpi) checkout and venv at
-`submodules/openpi` (not included) and are not wired into the collector.
+Same collector, different policy. The adapter is
+[`podolinsky/pi05-libero-x-level123-lora`](https://huggingface.co/podolinsky/pi05-libero-x-level123-lora)
+(LoRA on the action expert of `lerobot/pi05_libero`, trained on the 218 LIBERO-X Level 1-3 tasks;
+a one-epoch checkpoint, so expect a low success rate). The policy runs in its own venv:
+
+```bash
+(cd scripts/pi05-libero-x && uv sync)            # LeRobot 0.7.0, Python 3.12
+scripts/pi05-libero-x/collect.sh --level LEVEL1 --n-rollouts 10      # server + collector in one go
+LAYERS=16,17,final POOL=2 scripts/pi05-libero-x/collect.sh --level LEVEL1   # several layers, 64 tokens/camera
+```
+
+Or by hand: `scripts/pi05-libero-x/.venv/bin/python scripts/pi05-libero-x/serve_pi05.py --with-features --layers 16`
+and `MUJOCO_GL=egl uv run python scripts/groot-libero-x/collect.py --policy pi05 --with-features`.
+`eval_quick.py` is a small success-rate check against the same server. Outputs go to
+`outputs/pi05-libero-x/collect/` with the same layout as the GR00T runs. The adapter repo lacks the
+`tokenizer/` artifact its preprocessor config points at; the server fetches the stock PaliGemma
+tokenizer into `checkpoints/pi05-libero-x-level123-lora/` on first start.
+
+**What is saved.** Hidden states of the PaliGemma Gemma-2B backbone (18 blocks, width 2048) from the
+prefix pass, split by token type like the GR00T features: `base_image`, `wrist_image`
+`(256, 2048)` each (`256 / POOL**2` with `POOL`), `language` `(200, 2048)` + `language_mask`
+(padded slots zeroed; the discretised robot state is part of this text), fp16, one row per policy
+call. There is no `state_features`. `LAYERS` lists 0-based block outputs; the first is the primary
+(unsuffixed keys), the rest are saved as `base_image@L17` etc.
+
+**Action-expert states.** `EXPERT_LAYERS=16` (0-based expert block, 0..17) additionally saves that block's
+output at each denoise step as `expert@L16` `(S, 50, 1024)` fp16 (one row per policy call), with
+`expert_t@L16` `(S,)` giving the flow time of each step. `EXPERT_STEPS` is `all` (10 steps, default) or
+indices (`0` = first, `9` = last). In openpi's convention t=1.0 is pure noise and t=0.1 the last step,
+and the update is `x <- x + dt*v` with `dt = -0.1`. Unlike the backbone, every expert block is read by the
+action head, and the adapter's LoRA sits inside them, so these states depend on the adapter.
+
+```
+prefix = [ image 256 | wrist 256 | empty camera 256 (dropped) | text 200 ]  ->  Gemma-2B blocks b0 ... b17
+                                                                            -> final norm -> prefix_out
+action expert (Gemma-300M, 18 blocks): block i attends to the cached K/V of backbone block i,
+i.e. to the output of backbone block i-1
+```
+
+- Blocks **17** and **final** are computed but never read by the action expert (perturbing them changes
+  no action). **16** is the last block whose output the action head sees (default).
+- Activations grow with depth: block 16 has rms about 120-170 (max about 5k), block 17 about 400-500
+  (max about 49k, close to fp16's 65k), `final` about 1.
+- The LoRA only touches the action expert, so these backbone features are the same as the base
+  model's; the adapter only changes which actions are executed.
+- Size on disk, per policy call: backbone layer at 256 tokens/camera about 1.85 MB (`POOL=2`: about 0.6 MB);
+  one expert block over all 10 steps about 0.8 MB (2 steps: about 0.16 MB). A 1200-step failure episode
+  makes 120 calls.
+
+### Collect and ship to a Hugging Face dataset
+
+`scripts/pi05-libero-x/run_and_ship.py` runs the collection task by task and uploads in batches
+(about 50 GB) so the disk never fills up:
+
+```bash
+.venv/bin/python scripts/pi05-libero-x/run_and_ship.py --repo-id <user>/<dataset> --visibility public --n-rollouts 5
+```
+
+Per policy call it saves the robot state, backbone blocks 16 and 8 as full tokens, mean-pooled per-modality
+6144-d vectors of all 19 backbone layers, and all 18 expert blocks at denoise steps 0, 5, 9
+(`DATASET_CARD.md` documents every key; it becomes the dataset's README). One full-length episode is about
+1 GB. `scripts/groot-libero-x/ship_to_hub.py` does the shipping: commit the episode directories, check every
+file on the Hub (size and sha256), and only then delete `rollout.npz` and the videos locally (`rollout.json`,
+`manifest.csv` and a `shipped.json` marker stay, so a resumed run skips them). Any mismatch or error stops with
+nothing deleted; afterwards the Hub holds the only copy.
+
+`scripts/pi05-hook/` is the older openpi (JAX) version of the same hook, kept for reference.
 
 ## Credits and licence
 
 Built on NVIDIA [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T), Meituan
 [LIBERO-X](https://github.com/meituan/LIBERO-X) and Physical Intelligence
 [openpi](https://github.com/Physical-Intelligence/openpi) (Apache-2.0; `server/msgpack_numpy.py` and
-`pi05-hook/` derive from it). This repo has no licence file yet; check the upstream licences
-before redistributing.
+`pi05-hook/` derive from it) and Hugging Face [LeRobot](https://github.com/huggingface/lerobot)
+(Apache-2.0). The π0.5 base and adapter weights fall under the Gemma terms of use. This repo has no
+licence file yet; check the upstream licences before redistributing.

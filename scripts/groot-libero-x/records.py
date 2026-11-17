@@ -30,7 +30,8 @@ class GrootFeatures:
     language: np.ndarray
     language_mask: np.ndarray
     language_len: int
-    state_features: np.ndarray
+    state_features: np.ndarray | None = None  # GR00T only
+    extra: dict[str, np.ndarray] = field(default_factory=dict)  # other captured layers, e.g. "base_image@L17"
     source: str = "backbone"
     module: str = ""
     shapes: dict[str, tuple[int, ...]] = field(default_factory=dict)
@@ -43,6 +44,7 @@ class PolicyRecord:
     executed_control_step_start: int
     executed_control_step_end: int
     features: GrootFeatures | None = None
+    proprio: dict[str, np.ndarray] = field(default_factory=dict)  # robot state at this call, saved as robot_<key>
 
 
 @dataclass
